@@ -13,13 +13,25 @@ METRICS TO TRACK:
 - Microphone Volume and FFT
 - Webcam number of faces and detection of movement '''
 
-import os, sys, re, time, math
-import psutil, subprocess, getpass
 import datetime
-import numpy as np
-import pyaudio
+import getpass
+import math
+import msvcrt
+import os
+import re
 import struct
+import subprocess
+import sys
+import time
+from threading import Thread
+
+import numpy as np
+import psutil
+import pyaudio
+import pygame
 import webcam
+
+pygame.init()
 
 # constants
 CHUNK = 1024
@@ -27,10 +39,10 @@ FORMAT = pyaudio.paInt16
 CHANNELS = 1
 RATE = 44100
 LOG_RATE = 10 # time before logging 
-ROUNDING = 4
+ROUNDING = 2
 
 class Observer(object):
-    def __init__(self, cpu: float=0.0, gpu: float=0.0, disk: float=0.0, apps: list=[]) -> None:
+    def __init__(self, cpu: float=0.0, gpu: float=0.0, disk: float=0.0, apps: list=[], init_threshold=False) -> None:
         # updated variables
         self.last_cpu = cpu
         self.last_gpu = gpu
@@ -52,7 +64,7 @@ class Observer(object):
         )
 
         # webcam abstraction
-        self.cap = webcam.Camera()
+        self.cap = webcam.Camera(init_threshold=init_threshold)
 
         self.last_cpu, tmp = self.get_cpu_usage()
         self.last_gpu, tmp = self.get_gpu_usage()
@@ -65,8 +77,12 @@ class Observer(object):
         logs_path = os.path.join(cwd, 'logs')
         if not os.path.exists(logs_path):
             os.mkdir(logs_path)
+
+        self.log_path = ""
         
         self.initialized = True
+        # self.key_th = Thread(target=lambda: self.get_keyboard_events())
+        # self.key_th.start()
 
     def exit(self):
         self.cap.exit()
@@ -86,7 +102,7 @@ class Observer(object):
     def find_app_difference(self, curr: list, prev: list):
         ''' given too lists, return a list of uncommon values'''
         diff = []
-        for i in curr: 
+        for i in curr:
             if i not in prev: diff.append(i)
         for i in prev:
             if i not in curr and i not in diff: diff.append(i)
@@ -215,7 +231,7 @@ class Observer(object):
         # get the current webcam movement
         self.cap.update()
 
-        motion = bool(self.cap.bool_face_detected)
+        motion = int(self.cap.detected_movement)
         num_faces = int(self.cap.num_faces_detected)
         # _, frame = cap.read()
         # frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -254,25 +270,41 @@ class Observer(object):
         # return the motion and number of faces
         return motion, num_faces
 
+    def get_keyboard_events(self):
+        # self.keyboard = msvcrt.getch()
+        # print(bool(msvcrt.kbhit()))
+        try:
+            while True:
+                for event in pygame.event.get():
+                    if event.type == pygame.KEYDOWN:
+                        self.keyboard = True
+                self.keyboard =  False
+        except Exception as e:
+            print(f"ERROR keyboard thread\n{e}")
+
     def log_event(self, event, is_header=False):
         ''' function to log an event to a log file '''
-        timestamp = datetime.datetime.now().strftime('%H:%M:%S')
+        timestamp = datetime.datetime.now().time()
+        hours = timestamp.hour
+        minutes = timestamp.minute
+        seconds = timestamp.second
+
         cwd = os.getcwd()
-        path = os.path.join(cwd, f'logs/{self.today}.csv')
+        self.log_path = os.path.join(cwd, f'logs/{self.today}.csv')
         ignore_header = False
-        if os.path.isfile(path): ignore_header = True
+        if os.path.isfile(self.log_path): ignore_header = True
         # write the log to the log file
-        log_file = open(path, 'a+')
+        log_file = open(self.log_path, 'a+')
         if is_header:
             if ignore_header: pass
             else: log_file.write(event)
         else: 
-            log_file.write(f'{timestamp},{event}')
+            log_file.write(f'{hours},{minutes},{seconds},{event}')
         log_file.close()
 
 if __name__ == "__main__":
-    eye = Observer()
-    eye.log_event('TIME,CPU_PERCENT,CHANGE_IN_CPU,GPU_PERCENT,CHANGE_IN_GPU,DISK_PERCENT,CHANGE_IN_DISK,APPLICATIONS,VOLUME,RMS,FREQ,MOTION,NUM_FACES\n', is_header=True)
+    eye = Observer(init_threshold=False)
+    eye.log_event('HOUR,MINUTE,SECOND,CPU_PERCENT,CHANGE_IN_CPU,GPU_PERCENT,CHANGE_IN_GPU,DISK_PERCENT,CHANGE_IN_DISK,VOLUME,RMS,FREQ,MOTION,NUM_FACES\n', is_header=True)
     time.sleep(1)
     while True:
         try:
@@ -280,12 +312,13 @@ if __name__ == "__main__":
             cpu_usage, dcpu = eye.get_cpu_usage()
             gpu_usage, dgpu = eye.get_gpu_usage()
             disk_usage, ddisk = eye.get_disk_usage()
-            new_apps = eye.get_apps_open()
+            # new_apps = eye.get_apps_open()
+            # keyboard = eye.get_keyboard_events()
             volume, rms, max_freq = eye.get_volume_fft()
             motion, num_faces = eye.get_webcam_movement()
 
             # log the metrics
-            eye.log_event(f'{cpu_usage},{dcpu},{gpu_usage},{dgpu},{disk_usage},{ddisk},{new_apps},{volume},{rms},{max_freq},{motion},{num_faces}\n')
+            eye.log_event(f'{cpu_usage},{dcpu},{gpu_usage},{dgpu},{disk_usage},{ddisk},{volume},{rms},{max_freq},{motion},{num_faces}\n')
             time.sleep(LOG_RATE)
         except KeyboardInterrupt as e:
             try:
